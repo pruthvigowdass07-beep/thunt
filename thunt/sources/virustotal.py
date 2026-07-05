@@ -133,7 +133,9 @@ class VirusTotal(Source):
                 if votes.get("negative"):
                     vote_bits.append(f"-{votes['negative']}")
                 tag = f"[{' '.join(vote_bits)}] " if vote_bits else ""
-                notes.append((tag + text)[:400])
+                # Keep the full comment - the point of the tool is to read the intel
+                # here, not to open the VT page. Cap only pathologically long ones.
+                notes.append((tag + text)[:2000])
         if not notes and not cerr:
             notes.append("(no community comments on this indicator)")
 

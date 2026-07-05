@@ -6,6 +6,7 @@ import json as _json
 import re
 from dataclasses import asdict
 
+from rich import box
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
@@ -16,10 +17,6 @@ from .models import SourceResult, Verdict
 
 # Set by the CLI once it knows whether the output stream can encode emoji.
 USE_EMOJI = True
-
-# How many community/intel notes to show per source, and how long each may be.
-_MAX_NOTES = 6
-_NOTE_LEN = 200
 
 
 def _sym(v: Verdict) -> str:
@@ -41,21 +38,35 @@ def _fields_table(fields: dict[str, str]) -> Table:
     return t
 
 
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _note_body(text: str, accent: str) -> Text:
+    """Render one comment in full, tinting any URLs so links stand out."""
+    clean = re.sub(r"\s+", " ", str(text)).strip()
+    body = Text(overflow="fold")
+    pos = 0
+    for m in _URL_RE.finditer(clean):
+        if m.start() > pos:
+            body.append(clean[pos:m.start()], style="grey82")
+        body.append(m.group(0), style="blue underline")
+        pos = m.end()
+    if pos < len(clean):
+        body.append(clean[pos:], style="grey82")
+    return body
+
+
 def _notes_group(notes: list[str], accent: str) -> Group:
-    items: list = [Text("")]
-    items.append(Text(f"{_note_icon()}community / intel notes ({len(notes)})", style="bold grey74"))
-    for i, n in enumerate(notes[:_MAX_NOTES], 1):
-        clean = re.sub(r"\s+", " ", str(n)).strip()
-        if len(clean) > _NOTE_LEN:
-            clean = clean[: _NOTE_LEN - 1].rstrip() + "…"
-        line = Text(overflow="fold")
-        line.append(f" {i:>2}. ", style=f"bold {accent}")
-        line.append(clean, style="grey78")
-        items.append(line)
-    if len(notes) > _MAX_NOTES:
-        items.append(Text(f"     +{len(notes) - _MAX_NOTES} more — open the link below",
-                          style="grey50"))
-    return Group(*items)
+    header = Text(f"{_note_icon()}community / intel notes ({len(notes)})", style="bold grey74")
+    # One row per comment with horizontal rules between them: full text, clearly
+    # separated, nothing hidden behind a link.
+    tbl = Table(box=box.HORIZONTALS, show_header=False, expand=True, padding=(0, 1),
+                border_style="grey30", show_edge=False, show_lines=True)
+    tbl.add_column("n", style=f"bold {accent}", no_wrap=True, justify="right", width=2)
+    tbl.add_column("body", overflow="fold")
+    for i, n in enumerate(notes, 1):
+        tbl.add_row(str(i), _note_body(n, accent))
+    return Group(Text(""), header, tbl)
 
 
 def _source_panel(r: SourceResult) -> Panel:
