@@ -85,6 +85,21 @@ class VirusTotal(Source):
         if popular.get("suggested_threat_label"):
             fields["Threat label"] = str(popular["suggested_threat_label"])
 
+        # Code-signing / signer identity (for hashes) - who signed this binary and
+        # whether the signature is valid. A malicious file signed by a trusted vendor
+        # (stolen/abused cert) is a strong hunting signal.
+        siginfo = attr.get("signature_info") or {}
+        if siginfo:
+            signer = siginfo.get("signers") or siginfo.get("subject")
+            if signer:
+                fields["Signer"] = str(signer)
+            if siginfo.get("verified"):
+                fields["Signature"] = str(siginfo["verified"])
+            if siginfo.get("product") and siginfo.get("product") != attr.get("meaningful_name"):
+                fields["Product"] = str(siginfo["product"])
+            if siginfo.get("description"):
+                fields["Signed desc"] = str(siginfo["description"])
+
         if mal >= 3:
             verdict = Verdict.MALICIOUS
         elif mal or susp:
@@ -102,13 +117,20 @@ class VirusTotal(Source):
         )
         if not cerr and cdata:
             for c in cdata.get("data", []):
-                text = (c.get("attributes", {}).get("text") or "").strip().replace("\n", " ")
-                votes = c.get("attributes", {}).get("votes", {})
-                if text:
-                    tag = ""
-                    if votes.get("negative"):
-                        tag = f"[-{votes['negative']}] "
-                    notes.append((tag + text)[:280])
+                cattr = c.get("attributes", {})
+                text = (cattr.get("text") or "").strip().replace("\n", " ")
+                votes = cattr.get("votes", {}) or {}
+                if not text:
+                    continue
+                vote_bits = []
+                if votes.get("positive"):
+                    vote_bits.append(f"+{votes['positive']}")
+                if votes.get("negative"):
+                    vote_bits.append(f"-{votes['negative']}")
+                tag = f"[{' '.join(vote_bits)}] " if vote_bits else ""
+                notes.append((tag + text)[:300])
+        if not notes and not cerr:
+            notes.append("(no community comments on this indicator)")
 
         gui_kind = {"files": "file", "ip_addresses": "ip-address", "domains": "domain"}[collection]
         link = f"https://www.virustotal.com/gui/{gui_kind}/{ident}"
