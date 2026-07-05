@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json as _json
+import re
 from dataclasses import asdict
 
-from rich.columns import Columns
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
@@ -17,91 +17,125 @@ from .models import SourceResult, Verdict
 # Set by the CLI once it knows whether the output stream can encode emoji.
 USE_EMOJI = True
 
+# How many community/intel notes to show per source, and how long each may be.
+_MAX_NOTES = 6
+_NOTE_LEN = 200
+
 
 def _sym(v: Verdict) -> str:
     return v.emoji if USE_EMOJI else v.marker
 
 
 def _note_icon() -> str:
-    return "💬 " if USE_EMOJI else "* "
+    return "💬 " if USE_EMOJI else ""
 
 
 def _fields_table(fields: dict[str, str]) -> Table:
-    t = Table(show_header=False, box=None, pad_edge=False, expand=True)
-    t.add_column("k", style="bold cyan", no_wrap=True, ratio=1)
-    t.add_column("v", style="white", ratio=3, overflow="fold")
+    # A grid sizes the label column to its content, so values sit right beside the
+    # keys instead of across a wide gap.
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style="cyan", no_wrap=True, justify="left")
+    t.add_column(style="white", overflow="fold")
     for k, v in fields.items():
         t.add_row(k, str(v))
     return t
 
 
+def _notes_group(notes: list[str], accent: str) -> Group:
+    items: list = [Text("")]
+    items.append(Text(f"{_note_icon()}community / intel notes ({len(notes)})", style="bold grey74"))
+    for i, n in enumerate(notes[:_MAX_NOTES], 1):
+        clean = re.sub(r"\s+", " ", str(n)).strip()
+        if len(clean) > _NOTE_LEN:
+            clean = clean[: _NOTE_LEN - 1].rstrip() + "…"
+        line = Text(overflow="fold")
+        line.append(f" {i:>2}. ", style=f"bold {accent}")
+        line.append(clean, style="grey78")
+        items.append(line)
+    if len(notes) > _MAX_NOTES:
+        items.append(Text(f"     +{len(notes) - _MAX_NOTES} more — open the link below",
+                          style="grey50"))
+    return Group(*items)
+
+
 def _source_panel(r: SourceResult) -> Panel:
     if r.error:
-        title = Text.assemble((f"{r.source}", "bold"), ("  ✖", "grey37"))
+        title = Text.assemble((f"{r.source}", "bold grey58"), ("  ✖", "grey37"))
         body = Text(r.error, style="grey37")
-        return Panel(body, title=title, title_align="left", border_style="grey37")
+        return Panel(body, title=title, title_align="left", border_style="grey37",
+                     padding=(0, 1))
     if r.skipped:
-        title = Text.assemble((f"{r.source}", "bold grey50"))
+        title = Text.assemble((f"{r.source}", "bold grey50"), ("  —", "grey37"))
         body = Text(r.summary or "no data", style="grey37")
-        return Panel(body, title=title, title_align="left", border_style="grey30")
+        return Panel(body, title=title, title_align="left", border_style="grey30",
+                     padding=(0, 1))
 
     v = r.verdict
     title = Text.assemble(
-        (f"{_sym(v)} {r.source}", f"bold {v.color}"),
-        ("  ", ""),
-        (v.label.upper(), v.color),
+        (f"{_sym(v)} {r.source} ", f"bold {v.color}"),
+        (f" {v.label.upper()} ", f"reverse {v.color}"),
     )
-    parts = []
+    parts: list = []
     if r.summary:
-        parts.append(Text(r.summary, style=v.color))
+        parts.append(Text(r.summary, style=f"bold {v.color}"))
     if r.fields:
         parts.append(_fields_table(r.fields))
     if r.notes:
-        notes_tbl = Table(show_header=True, box=None, pad_edge=False, expand=True)
-        notes_tbl.add_column(f"{_note_icon()}community / intel notes", style="italic grey74", overflow="fold")
-        for n in r.notes:
-            notes_tbl.add_row(n)
-        parts.append(notes_tbl)
+        parts.append(_notes_group(r.notes, v.color))
     if r.link:
-        parts.append(Text(r.link, style="blue underline"))
-    return Panel(Group(*parts), title=title, title_align="left", border_style=v.color)
+        parts.append(Text(""))
+        parts.append(Text.assemble(("↗ ", "grey50"), (r.link, "blue underline")))
+    return Panel(Group(*parts), title=title, title_align="left", border_style=v.color,
+                 padding=(0, 1))
 
 
 def _banner(report: Report) -> Panel:
     v = report.overall
-    headline = Text()
-    headline.append(f"{_sym(v)}  ", style="bold")
+    headline = Text(overflow="fold")
+    headline.append(f" {_sym(v)} {v.label.upper()} ", style=f"reverse bold {v.color}")
+    headline.append("  ")
     headline.append(report.indicator, style="bold white")
-    headline.append(f"   [{report.itype.value}]", style="grey62")
-    headline.append("\n")
-    headline.append(f"{v.label.upper()}", style=f"bold {v.color}")
+    headline.append(f"  ({report.itype.value})", style="grey62")
 
     mal = report.malicious_sources
     susp = report.suspicious_sources
     detail = Text()
     if mal:
-        detail.append("\nMalicious per: ", style="grey74")
+        detail.append("\nflagged malicious by  ", style="grey74")
         detail.append(", ".join(mal), style="bold red")
     if susp:
-        detail.append("\nSuspicious per: ", style="grey74")
+        detail.append("\nflagged suspicious by ", style="grey74")
         detail.append(", ".join(susp), style="yellow")
     if not mal and not susp:
-        detail.append("\nNo source flagged this indicator.", style="green")
+        detail.append("\nno source flagged this indicator", style="green")
 
     return Panel(
         Group(headline, detail),
         border_style=v.color,
         title="thunt · threat verdict",
         title_align="left",
+        padding=(0, 1),
     )
 
 
 def render(report: Report, console: Console) -> None:
     console.print(_banner(report))
 
-    panels = [_source_panel(r) for r in report.results]
-    if panels:
-        console.print(Columns(panels, equal=False, expand=True, column_first=True))
+    # Order panels so the sources that actually flagged something come first, then
+    # informational, then errors/skips - most useful at the top.
+    def _rank(r: SourceResult) -> int:
+        if r.error:
+            return 3
+        if r.skipped:
+            return 2
+        if r.verdict in (Verdict.MALICIOUS, Verdict.SUSPICIOUS):
+            return 0
+        return 1
+
+    ordered = sorted(report.results, key=_rank)
+    if ordered:
+        for r in ordered:
+            console.print(_source_panel(r))
     else:
         console.print(Text("No sources returned data for this indicator.", style="grey62"))
 

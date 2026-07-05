@@ -7,6 +7,7 @@ that the user specifically asked for (a second /comments call).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -118,7 +119,11 @@ class VirusTotal(Source):
         if not cerr and cdata:
             for c in cdata.get("data", []):
                 cattr = c.get("attributes", {})
-                text = (cattr.get("text") or "").strip().replace("\n", " ")
+                text = cattr.get("text") or ""
+                # VT community comments use BBCode ([b], [url=...], [code]); strip the
+                # tags and collapse whitespace so they read as clean prose.
+                text = re.sub(r"\[/?[a-zA-Z][^\]]*\]", "", text)
+                text = re.sub(r"\s+", " ", text).strip()
                 votes = cattr.get("votes", {}) or {}
                 if not text:
                     continue
@@ -128,7 +133,7 @@ class VirusTotal(Source):
                 if votes.get("negative"):
                     vote_bits.append(f"-{votes['negative']}")
                 tag = f"[{' '.join(vote_bits)}] " if vote_bits else ""
-                notes.append((tag + text)[:300])
+                notes.append((tag + text)[:400])
         if not notes and not cerr:
             notes.append("(no community comments on this indicator)")
 
